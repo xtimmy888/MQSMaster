@@ -15,24 +15,36 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # outside this directory -- cron included.
 PYTHON_VENV="${PYTHON_VENV:-${SCRIPT_DIR}/MQS/bin/python}"
 
-# Load environment variables (like FMP_API_KEY) from the .env file, if one is
-# present. .env is for local/dev use only -- it is gitignored and dockerignored,
-# so it never exists in the container. In ECS, credentials arrive as real
-# process environment variables (task definition `environment`/`secrets`),
-# already set before this script runs.
+# Credentials the app expects, as both .env keys and process env var names
+# (they're deliberately identical -- see MQS_AWS_INFRA ssm-parameters module).
+ENV_KEYS=(FMP_API_KEY ALPHA_KEY APIFY_KEY db_user password host port database sslmode)
+
+# start.sh sources .env (or falls back to empty .env.example which
+# would clobber the ECS-injected env vars). Materialise a real .env
+# from the secrets ECS already injected, so source preserves them.
 #
-# Previously, a missing .env fell back to copying .env.example (every value
-# blank) to .env and sourcing THAT. In ECS .env is always missing, so this
-# path always ran -- silently overwriting the credentials ECS had already
-# injected with empty strings. Do not resurrect that fallback: if .env is
-# absent, trust the environment as-is and let the check below catch anything
-# actually missing.
-if [ -f "${SCRIPT_DIR}/.env" ]; then
-    echo "[INFO] Loading environment from ${SCRIPT_DIR}/.env."
-    source "${SCRIPT_DIR}/.env"
-else
-    echo "[INFO] No .env file at ${SCRIPT_DIR}/.env -- assuming credentials are already set in the environment (e.g. ECS task secrets)."
+# .env is for local/dev use only -- it is gitignored and dockerignored, so it
+# never exists in the container; ECS instead sets these as real process
+# environment variables (task definition `environment`/`secrets`) before this
+# script runs. The old fallback copied .env.example (every value blank) to
+# .env and sourced THAT -- since .env is always missing in ECS, that path
+# always ran, silently overwriting the credentials ECS had already injected
+# with empty strings. Writing .env from the current environment instead keeps
+# the single `source` codepath below correct in both places: locally it picks
+# up whatever .env already has, and in ECS it round-trips the same values
+# that were already set, rather than erasing them.
+if [ ! -f "${SCRIPT_DIR}/.env" ]; then
+    echo "[INFO] No .env file at ${SCRIPT_DIR}/.env -- materialising one from the current environment (e.g. ECS task secrets)."
+    : > "${SCRIPT_DIR}/.env"
+    for var in "${ENV_KEYS[@]}"; do
+        if [ -n "${!var:-}" ]; then
+            printf '%s=%q\n' "$var" "${!var}" >> "${SCRIPT_DIR}/.env"
+        fi
+    done
 fi
+
+echo "[INFO] Loading environment from ${SCRIPT_DIR}/.env."
+source "${SCRIPT_DIR}/.env"
 
 # Fail fast and loud if required credentials are missing, rather than limping
 # along with blank values -- from a stale .env, a misconfigured ECS task
