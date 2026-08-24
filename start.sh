@@ -15,20 +15,38 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # outside this directory -- cron included.
 PYTHON_VENV="${PYTHON_VENV:-${SCRIPT_DIR}/MQS/bin/python}"
 
-# Load environment variables (like FMP_API_KEY) from the .env file.
-# The .env file should be in the same directory as this script.
+# Load environment variables (like FMP_API_KEY) from the .env file, if one is
+# present. .env is for local/dev use only -- it is gitignored and dockerignored,
+# so it never exists in the container. In ECS, credentials arrive as real
+# process environment variables (task definition `environment`/`secrets`),
+# already set before this script runs.
+#
+# Previously, a missing .env fell back to copying .env.example (every value
+# blank) to .env and sourcing THAT. In ECS .env is always missing, so this
+# path always ran -- silently overwriting the credentials ECS had already
+# injected with empty strings. Do not resurrect that fallback: if .env is
+# absent, trust the environment as-is and let the check below catch anything
+# actually missing.
 if [ -f "${SCRIPT_DIR}/.env" ]; then
+    echo "[INFO] Loading environment from ${SCRIPT_DIR}/.env."
     source "${SCRIPT_DIR}/.env"
 else
-    echo "[ERROR] .env file not found at ${SCRIPT_DIR}/.env. trying .env.example."
-    if [ -f "${SCRIPT_DIR}/.env.example" ]; then
-        cp "${SCRIPT_DIR}/.env.example" "${SCRIPT_DIR}/.env"
-        echo "[WARNING] Created .env from .env.example. Please verify credentials are correct."
-        source "${SCRIPT_DIR}/.env"
-    else
-        echo "[ERROR] .env.example file not found at ${SCRIPT_DIR}/.env.example. Exiting."
-        exit 1
+    echo "[INFO] No .env file at ${SCRIPT_DIR}/.env -- assuming credentials are already set in the environment (e.g. ECS task secrets)."
+fi
+
+# Fail fast and loud if required credentials are missing, rather than limping
+# along with blank values -- from a stale .env, a misconfigured ECS task
+# definition, or an SSM parameter that never got pushed.
+required_vars=(FMP_API_KEY db_user password host port database)
+missing_vars=()
+for var in "${required_vars[@]}"; do
+    if [ -z "${!var:-}" ]; then
+        missing_vars+=("$var")
     fi
+done
+if [ ${#missing_vars[@]} -gt 0 ]; then
+    echo "[ERROR] Missing required environment variable(s): ${missing_vars[*]}. Exiting."
+    exit 1
 fi
 
 # Set the exchange to monitor.
