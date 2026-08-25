@@ -49,6 +49,10 @@ class SchemaDefinitions:
             created_at TIMESTAMP DEFAULT NOW()
         );
         """
+        create_market_data_date_index = """
+        CREATE INDEX IF NOT EXISTS idx_market_data_date
+            ON market_data (date);
+        """
         create_trade_logs_table = """
         CREATE TABLE IF NOT EXISTS trade_execution_logs (
             trade_id SERIAL PRIMARY KEY,
@@ -158,6 +162,7 @@ class SchemaDefinitions:
         statements = [
             create_user_creds_table,
             create_market_data_table,
+            create_market_data_date_index,
             create_trade_logs_table,
             create_pnl_book_table,
             create_risk_book_table,

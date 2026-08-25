@@ -368,6 +368,7 @@ market_scripts=(
 # survive crashes via the spawn_persistent supervisor loop.
 persistent_scripts=(
   "./NLP/main_NLP.py"
+  "./src/orchestrator/retention/prune_market_data.py"
 )
 
 check_db=(
