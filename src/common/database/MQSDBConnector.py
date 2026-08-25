@@ -207,7 +207,7 @@ class MQSDBConnector:
         self,
         table,
         data: list[dict[Any, Any]],
-        conflict_columns: list[str] = [""],
+        conflict_columns: list[str] | None = None,
         schema: str = "",
     ) -> dict[str, str]:
         """
@@ -237,18 +237,26 @@ class MQSDBConnector:
                 if conflict_columns:
                     sql += f" ON CONFLICT ({', '.join(conflict_columns)}) DO NOTHING"
 
+                # RETURNING + fetch=True lets execute_values aggregate the actually-
+                # inserted row count across every page it issues (page_size defaults
+                # to 100, so cursor.rowcount alone would only reflect the last page).
+                sql += " RETURNING 1"
+
                 # Prepare data for execute_values
                 values = [[row[col] for col in columns] for row in data]
 
-                psycopg2.extras.execute_values(cursor, sql, values)
-                inserted_count = cursor.rowcount - len(
-                    conflict_columns
-                )  # Adjust for ignored rows due to conflicts
+                results = psycopg2.extras.execute_values(
+                    cursor, sql, values, fetch=True
+                )
+                inserted_count = len(results) if results else 0
+                ignored_count = len(data) - inserted_count
                 conn.commit()
 
                 return {
                     "status": "success",
-                    "message": f"Successfully inserted {inserted_count} and ignored {len(conflict_columns)} rows.",
+                    "message": f"Successfully inserted {inserted_count} and ignored {ignored_count} rows.",
+                    "inserted_count": inserted_count,
+                    "ignored_count": ignored_count,
                 }
 
         except Exception as e:
