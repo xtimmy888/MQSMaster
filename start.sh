@@ -255,16 +255,55 @@ launch_market_script() {
 # procps (pgrep/ps) -- minimal base images often lack that package entirely,
 # which would otherwise make this check silently pass every time. /proc is
 # part of the kernel, not a package, so this works anywhere Linux does.
-is_process_running() {
+#
+# Prints the first matching PID on success (find_pid_by_cmdline) -- used both
+# for the plain running/not-running check below and to locate a persistent
+# script's current PID for memory logging, since spawn_persistent's watcher
+# restarts it under a new PID on every crash and nothing else tracks that PID.
+find_pid_by_cmdline() {
   local pattern="$1"
   local pid_dir
   for pid_dir in /proc/[0-9]*; do
     [ -r "${pid_dir}/cmdline" ] || continue
     if tr '\0' ' ' < "${pid_dir}/cmdline" 2>/dev/null | grep -qF -- "$pattern"; then
+      basename "$pid_dir"
       return 0
     fi
   done
   return 1
+}
+
+is_process_running() {
+  find_pid_by_cmdline "$1" >/dev/null
+}
+
+# Log one process's resident memory (VmRSS, from /proc -- no procps dependency)
+# plus its full command line so the log line is self-identifying even if the
+# caller only had a PID. Silently skips a PID that's gone by the time it's
+# read (process exited between discovery and this call) rather than erroring.
+log_process_memory() {
+  local pid="$1"
+  local rss_kb cmdline
+  rss_kb=$(awk '/^VmRSS:/{print $2}' "/proc/${pid}/status" 2>/dev/null)
+  [ -n "$rss_kb" ] || return 0
+  cmdline=$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null)
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [mem] ${cmdline:-PID $pid} (PID $pid): $(( rss_kb / 1024 )) MB"
+}
+
+# Purely observational: logs memory for every tracked market-hours PID plus
+# each configured persistent script (looked up fresh each call, per
+# find_pid_by_cmdline's docstring above). Informs whether market_task_memory
+# needs raising now that persistent_scripts (NLP) can run folded into this
+# same task -- see ecs-task-market's header comment in MQS_AWS_INFRA -- without
+# committing to a number ahead of having real data.
+log_memory_usage() {
+  local pid script
+  for pid in "${market_pids[@]}"; do
+    log_process_memory "$pid"
+  done
+  for script in "${persistent_to_run[@]}"; do
+    pid=$(find_pid_by_cmdline "$script") && log_process_memory "$pid"
+  done
 }
 
 # Spawn a script under a detached auto-restart watcher.
@@ -423,6 +462,11 @@ fi
 
 echo "Market PIDs: ${market_pids[*]}"
 
+# Baseline reading right after launch, before the recurring one in the
+# monitoring loop below -- startup memory isn't steady-state, but it's a
+# useful T+0 anchor to compare later readings against.
+log_memory_usage
+
 # --- MONITORING LOOP ---
 
 unknown_streak=0
@@ -491,6 +535,8 @@ while true; do
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] All market processes exited before market close. Exiting watchdog."
     exit 1
   fi
+
+  log_memory_usage
 
   # If the market is still open, wait for 3 minutes.
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Market is open (${#market_pids[@]} process(es) alive). Checking again in 3 minutes."
