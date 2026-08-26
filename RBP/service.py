@@ -242,8 +242,6 @@ class RBPForecastService:
             )
             return 0
 
-        # bulk_inject_to_db's message is "Successfully inserted (rowcount - len(conflict_columns)) rows and ignored (len(conflict_columns)) rows."
-        # That count reflects affected rows after ON CONFLICT DO NOTHING; we
-        # surface the constructed row count as the caller's "attempted" total
-        # and treat any non-error status as a successful upsert of len(rows).
-        return len(rows)
+        # bulk_inject_to_db returns the actual post-ON-CONFLICT-DO-NOTHING insert
+        # count; fall back to len(rows) only if an older connector doesn't supply it.
+        return result.get("inserted_count", len(rows))
