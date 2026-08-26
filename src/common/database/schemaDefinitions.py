@@ -49,6 +49,10 @@ class SchemaDefinitions:
             created_at TIMESTAMP DEFAULT NOW()
         );
         """
+        create_market_data_index = """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_market_data_ticker_timestamp
+            ON market_data (ticker, timestamp);
+        """
         create_trade_logs_table = """
         CREATE TABLE IF NOT EXISTS trade_execution_logs (
             trade_id SERIAL PRIMARY KEY,
@@ -173,4 +177,18 @@ class SchemaDefinitions:
             result = self.db.execute_query(stmt)
             if result["status"] == "error":
                 pass  #continue with the next statement logging happens within the execute_query method
+
+        # create_market_data_index backs the ON CONFLICT (ticker, timestamp) used by
+        # the realtime ingestor and backfill scripts. Unlike the loop above, its
+        # failure (e.g. pre-existing duplicate rows) is surfaced loudly rather than
+        # silently swallowed, since a missing index breaks that conflict handling.
+        index_result = self.db.execute_query(create_market_data_index)
+        if index_result["status"] == "error":
+            logging.error(
+                "Failed to create idx_market_data_ticker_timestamp: %s. "
+                "ON CONFLICT (ticker, timestamp) upserts against market_data will fail "
+                "until duplicate rows are resolved and this index is created.",
+                index_result["message"],
+            )
+
         print("All tables created or confirmed to exist.")
