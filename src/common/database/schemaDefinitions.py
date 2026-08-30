@@ -183,7 +183,7 @@ class SchemaDefinitions:
         # the realtime ingestor and backfill scripts. Unlike the loop above, its
         # failure (e.g. pre-existing duplicate rows) is surfaced loudly rather than
         # silently swallowed, since a missing index breaks that conflict handling.
-        index_result = self.db.execute_query(create_market_data_index)
+        index_result = self.db.execute_query(create_market_data_date_index)
         if index_result["status"] == "error":
             logging.error(
                 "Failed to create idx_market_data_ticker_timestamp: %s. "
